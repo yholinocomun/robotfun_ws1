@@ -1,48 +1,45 @@
 /* ============================================================================
- *  robotfun_esp32_microros.ino
+ *  robotfun_esp32_microros.ino   —   VERSION DEFINITIVA (movimiento FLUIDO)
  *  ---------------------------------------------------------------------------
- *  BAJO NIVEL (micro-ROS) del brazo de 5 juntas + GRIPPER = 6 canales.
+ *  BAJO NIVEL (micro-ROS) del brazo de 4 GDL (yaw + 3 pitch) + GRIPPER.
  *
- *  Canales (orden FIJO en todo el sistema — URDF, IK y firmware):
- *      idx :    0        1        2        3        4        5
- *      junta:  joint_1  joint_2  joint_3  joint_4  joint_5  gripper
- *                yaw     hombro   codo     ROLL     pinza    apertura
+ *  >>> UNICO CAMBIO respecto al codigo del usuario (integracion al workspace):
+ *  >>> el canal 5 se publica en /joint_states con el nombre "gripper" (antes
+ *  >>> "joint_5") para que coincida con la junta del URDF y RViz anime la
+ *  >>> pinza. El orden/tamano de los mensajes NO cambia: /joint_command sigue
+ *  >>> siendo [q1, q2, q3, q4, gripper] posicional.
  *
- *  joint_4 es el ROLL de muñeca (eje colineal con el antebrazo). Se puede:
- *      JOINT4_LOCKED 1  → BLOQUEADO: ignora el comando y mantiene el servo en
- *                         su centro (0 rad = 90°). Modo A (4 GDL efectivos,
- *                         coherente con lock_joint_4:=true en ROS).
- *      JOINT4_LOCKED 0  → ACTIVO: obedece /joint_command. Modo B (roll),
- *                         coherente con lock_joint_4:=false en ROS.
- *  En AMBOS casos el canal existe en /joint_states y en /joint_command (el
- *  vector siempre tiene 6 elementos): cambiar de modo NO cambia la interfaz.
+ *  POR QUE ANTES SE VEIA "A PASITOS":
+ *    El suavizado corria dentro de loop(), junto a micro-ROS. spin_some() bloquea
+ *    de forma IRREGULAR al hablar con el agente => los pasos del servo salian
+ *    desiguales => se veia entrecortado.
+ *
+ *  SOLUCION (reestructuracion):
+ *    El movimiento se ejecuta en una TAREA DE TIEMPO REAL dedicada (FreeRTOS) en
+ *    el nucleo 0, con temporizacion EXACTA (vTaskDelayUntil @50 Hz). Inmune al
+ *    jitter de micro-ROS => movimiento FLUIDO. Ademas:
+ *      - Perfil TRAPEZOIDAL (arranca y frena gradual, sin tirones).
+ *      - Resolucion FINA en microsegundos (float), no en pasos de 1 grado.
+ *    El nucleo 1 (loop) solo hace micro-ROS: recibe /joint_command y publica el
+ *    feedback de pots en /joint_states. Ambos nucleos comparten solo el objetivo.
+ *
+ *  Anti-bucle: es lazo abierto (llega y se queda), loop() cede CPU (delay(1)) y no
+ *  hay memoria RTC. Si aun rebotara a HOME, es RESET por hardware (brownout de la
+ *  fuente de servos): usa fuente externa 5-6V, GND comun y condensador 1000uF.
+ *
+ *  Juntas: 4 de brazo (joint_1..joint_4; el antiguo roll fue RETIRADO del
+ *  hardware y su canal se reutilizo para el pitch de muñeca) + gripper.
  *
  *  Pipeline:
- *    /joint_command (std_msgs/Float32MultiArray, RADIANES,
- *                    [q1, q2, q3, q4, q5, gripper])
- *        --> perfil de suavizado (tarea FreeRTOS, límite de velocidad)
- *        --> 6 servos
- *    6 potenciómetros --> /joint_states (sensor_msgs/JointState, RADIANES) @25 Hz
+ *    /joint_command (Float32MultiArray, RADIANES [q1,q2,q3,q4, gripper]) -> objetivo
+ *    tarea servo @50 Hz (perfil trapezoidal, writeMicroseconds) -> 5 servos FLUIDO
+ *    5 potenciometros -> /joint_states (JointState, RADIANES) @25 Hz (para RViz)
  *
- *  UNIDADES: el bus ROS va SIEMPRE en RADIANES (REP-103). La conversión a
- *  GRADOS de servo ocurre solo al escribir el PWM. La calibración se expresa
- *  en grados/cuentas ADC (lo intuitivo del hardware).
- *
- *  HOME: todas las juntas a 0 rad => servos a 90 grados (brazo recto vertical).
- *
- *  PINES (fijos del hardware):
- *      idx :    0    1    2    3    4    5
- *      SERVO:   2    4    5   18   19   21
- *      POT  :  32   33   34   35   27   26
- *      (34 y 35 son solo-entrada ADC1: perfectos para pots. 27/26 son ADC2:
- *       sin conflicto porque el transporte micro-ROS es SERIAL, no WiFi.)
- *      LED de estado: GPIO 13.
- *
- *  MOVIMIENTO SUAVE (dos capas):
- *    1. trajectory_node (ROS) genera el perfil trapezoidal fino a 50 Hz.
- *    2. Esta tarea FreeRTOS limita la velocidad de cada servo (MAX_SPEED_DPS)
- *       como red de seguridad ante comandos escalón (p. ej. ik_node directo).
+ *  PINES: SERVO {2,4,5,18,19}  POT {32,33,34,35,27}.  LED de estado: GPIO 13.
+ *  (Si tu cableado de servos sigue en {2,4,5,19,21}, ajusta SERVO_PINS[].)
  * ==========================================================================*/
+
+#include <math.h>
 
 #include <micro_ros_arduino.h>
 #include <ESP32Servo.h>
@@ -55,68 +52,69 @@
 #include <sensor_msgs/msg/joint_state.h>
 #include <std_msgs/msg/float32_multi_array.h>
 
-// ===========================================================================
-//  CONFIGURACIÓN DE MODO
-// ===========================================================================
-// 1 = joint_4 (roll) bloqueado a 90° (modo A, 4 GDL efectivos)  |  0 = activo
-#define JOINT4_LOCKED  1
-
 #define STATUS_LED_PIN 13
-#define NUM_CH         6          // 5 juntas de brazo + 1 gripper
-#define JOINT4_INDEX   3
-#define GRIPPER_INDEX  5
+#define NUM_CH         5          // joint_1..joint_4 (brazo) + gripper
+#define GRIPPER_INDEX  4
 
-const int SERVO_PINS[NUM_CH] = {  2,  4,  5, 18, 19, 21 };
-const int POT_PINS[NUM_CH]   = { 32, 33, 34, 35, 27, 26 };
+const int SERVO_PINS[NUM_CH] = {  2,  4,  5, 18, 19 };
+const int POT_PINS[NUM_CH]   = { 32, 33, 34, 35, 27 };
 
-static const char JOINT_LABEL[NUM_CH][12] =
-    { "joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "gripper" };
+// Nombres publicados en /joint_states (DEBEN coincidir con el URDF).
+const char *JOINT_LABEL[NUM_CH] = { "joint_1", "joint_2", "joint_3", "joint_4", "gripper" };
 
 // ===========================================================================
-//  CALIBRACIÓN (grados / cuentas ADC). Ajustar en pruebas (ver README).
+//  MAPEO DE SERVO (grados). servo_deg = CENTER + DIR*q_deg, saturado a [0,180].
+//  SERVO_DIRECTION confirmado {1,-1,1,-1,1}. Si el gripper gira al reves, pon [4]=-1.
 // ===========================================================================
-// RAW_ZERO[i]: lectura ADC (0..4095) de cada pot en HOME (juntas a 0 rad).
+const int   SERVO_DIRECTION[NUM_CH]  = {  1, -1,  1, -1,  1 };
+const float SERVO_CENTER_DEG[NUM_CH] = { 90, 90, 90, 90, 90 };
+const float JOINT_MIN_DEG[NUM_CH]    = { -90, -90, -90, -90,  0 };
+const float JOINT_MAX_DEG[NUM_CH]    = {  90,  90,  90,  90, 70 };
+const int   SERVO_US_MIN = 500;      // us a 0 grados   (coincide con attach)
+const int   SERVO_US_MAX = 2400;     // us a 180 grados
+
+// ===========================================================================
+//  FLUIDEZ: perfil trapezoidal por junta (grados/s, grados/s^2).
+//  MAX_VEL = velocidad de crucero (mas bajo = mas lento). MAX_ACC = suavidad del
+//  arranque/frenado (mas bajo = mas gradual). El gripper va un poco mas agil.
+// ===========================================================================
+// idx:                            j1     j2     j3     j4    gripper
+const float MAX_VEL[NUM_CH] = {  70.0f, 70.0f, 70.0f, 70.0f, 120.0f };  // grados/s
+const float MAX_ACC[NUM_CH] = { 150.0f,150.0f,150.0f,150.0f, 300.0f };  // grados/s^2
+#define SERVO_TASK_HZ 50                        // 50 Hz = trama del servo
+const float SERVO_DT = 1.0f / (float)SERVO_TASK_HZ;
+
+// ===========================================================================
+//  FEEDBACK de potenciometros (para /joint_states). Calibracion del usuario.
+// ===========================================================================
 int RAW_ZERO[NUM_CH] = {
-  1194,   // joint_1  (pot 32)
-  1165,   // joint_2  (pot 33)
-  1191,   // joint_3  (pot 34)
-  1415,   // joint_4  (pot 35, roll)
-  1423,   // joint_5  (pot 27, pitch de pinza)
-  1300    // gripper  (pot 26)
+  1267,   // joint_1
+  1232,   // joint_2
+  1265,   // joint_3
+  1405,   // joint_4  (pitch de muñeca)
+  1302    // gripper
 };
-
-// FEEDBACK_DIRECTION[i]: sentido del pot hacia la convención DH (-1 invierte).
-// joint_5 va en -1 porque su eje DH es +Y (opuesto a los pitch 2 y 3). CALIBRAR.
-const float FEEDBACK_DIRECTION[NUM_CH] = { 1, 1, 1, 1, -1, 1 };
-
-// SERVO_DIRECTION[i]: sentido del servo respecto al comando (+q en el sentido
-// positivo de la convención DH). Cambia el signo si gira al revés. CALIBRAR.
-const float SERVO_DIRECTION[NUM_CH] = { -1, -1, 1, 1, -1, -1 };
-
-// Rango articular por canal (grados). Brazo ±90; gripper 0..70 (cierra/abre).
-const float JOINT_MIN_DEG[NUM_CH] = { -90, -90, -90, -90, -90,  0 };
-const float JOINT_MAX_DEG[NUM_CH] = {  90,  90,  90,  90,  90, 70 };
-const float SERVO_CENTER_DEG = 90.0f;
-
-// Suavizado: velocidad máxima de cada servo (grados/s) y tasa de la tarea.
-const float MAX_SPEED_DPS[NUM_CH] = { 120, 120, 120, 150, 150, 240 };
-const int   SMOOTH_RATE_HZ = 50;
-
-const float ADC_TO_DEG = 180.0f / 4095.0f;     // pot de 180° sobre 0..4095
+const float FEEDBACK_DIRECTION[NUM_CH] = { 1, 1, -1, -1, 1 };
+const float ADC_TO_DEG = 180.0f / 4095.0f;
 const float DEG2RAD = 0.017453292519943295f;
 const float RAD2DEG = 57.29577951308232f;
 const float ALPHA = 0.15f;                      // filtro exponencial del ADC
 
 // ===========================================================================
 Servo servos[NUM_CH];
+
+// Objetivo COMPARTIDO entre nucleos (grados de junta). Escrito por micro-ROS
+// (command_callback, nucleo 1) y leido por la tarea de servo (nucleo 0).
+// float de 32 bits => escritura/lectura atomica en el ESP32.
+volatile float target_deg[NUM_CH];
+
+// Estado del perfil (solo lo usa la tarea de servo).
+float cur_deg[NUM_CH];
+float cur_vel[NUM_CH];
+
+// Feedback
 float feedback_filtered[NUM_CH];
 bool  filter_initialized = false;
-
-// Objetivo (grados de servo 0..180) escrito por el callback; la tarea de
-// suavizado lo persigue con velocidad limitada. volatile: compartido entre
-// el executor de micro-ROS (núcleo 1) y la tarea de suavizado (núcleo 0).
-volatile float servo_target_deg[NUM_CH];
-float servo_current_deg[NUM_CH];
 
 rcl_node_t node;
 rclc_support_t support;
@@ -129,6 +127,7 @@ rcl_timer_t timer;
 sensor_msgs__msg__JointState joint_state_msg;
 std_msgs__msg__Float32MultiArray command_msg;
 
+static char joint_name_buf[NUM_CH][12] = { "joint_1", "joint_2", "joint_3", "joint_4", "gripper" };
 static rosidl_runtime_c__String joint_names[NUM_CH];
 static double position_data[NUM_CH];
 static double velocity_data[NUM_CH];
@@ -144,58 +143,67 @@ void error_loop() {
 
 float clampf(float x, float lo, float hi) { return x < lo ? lo : (x > hi ? hi : x); }
 
-// ADC -> radianes. 0 rad corresponde a RAW_ZERO[i] (HOME).
+// grados de junta q -> microsegundos PWM (float -> resolucion fina => fluido).
+int deg_to_us(float q_deg, int i) {
+  q_deg = clampf(q_deg, JOINT_MIN_DEG[i], JOINT_MAX_DEG[i]);
+  float servo_deg = SERVO_CENTER_DEG[i] + SERVO_DIRECTION[i] * q_deg;
+  servo_deg = clampf(servo_deg, 0.0f, 180.0f);
+  return (int)(SERVO_US_MIN + servo_deg * (float)(SERVO_US_MAX - SERVO_US_MIN) / 180.0f);
+}
+
+// ADC -> radianes (feedback). 0 rad corresponde a RAW_ZERO[i] (HOME).
 float adc_to_rad(int raw, int i) {
   float deg = FEEDBACK_DIRECTION[i] * (float)(raw - RAW_ZERO[i]) * ADC_TO_DEG;
   deg = clampf(deg, JOINT_MIN_DEG[i], JOINT_MAX_DEG[i]);
   return deg * DEG2RAD;
 }
 
-// radianes -> grados de servo (0..180). 0 rad => 90° (centro = HOME).
-float rad_to_servo_deg(float q_rad, int i) {
-  float q_deg = clampf(q_rad * RAD2DEG, JOINT_MIN_DEG[i], JOINT_MAX_DEG[i]);
-  return clampf(SERVO_CENTER_DEG + SERVO_DIRECTION[i] * q_deg, 0.0f, 180.0f);
-}
-
-// Fija los objetivos de servo (la tarea de suavizado hace el movimiento).
-void set_servo_targets(const float *q_cmd_rad) {
-  for (int i = 0; i < NUM_CH; i++) {
-#if (JOINT4_LOCKED)
-    if (i == JOINT4_INDEX) { servo_target_deg[i] = SERVO_CENTER_DEG; continue; }
-#endif
-    servo_target_deg[i] = rad_to_servo_deg(q_cmd_rad[i], i);
-  }
-}
-
-// Callback de /joint_command (RADIANES [q1..q5, gripper]; acepta >=5).
-void command_callback(const void *msgin) {
-  const std_msgs__msg__Float32MultiArray *msg =
-      (const std_msgs__msg__Float32MultiArray *)msgin;
-  if (msg->data.size < NUM_CH - 1) return;   // mínimo las 5 juntas del brazo
-  for (int i = 0; i < NUM_CH; i++) {
-    if ((size_t)i < msg->data.size) {
-      float lo = JOINT_MIN_DEG[i] * DEG2RAD, hi = JOINT_MAX_DEG[i] * DEG2RAD;
-      command_data[i] = clampf(msg->data.data[i], lo, hi);
-    }   // si no llega el gripper (size==5) conserva su último valor
-  }
-  set_servo_targets(command_data);
-}
-
-// Tarea FreeRTOS de SUAVIZADO: persigue el objetivo con velocidad limitada.
-void smoothing_task(void *arg) {
-  (void)arg;
-  const TickType_t period = pdMS_TO_TICKS(1000 / SMOOTH_RATE_HZ);
+// ---------------------------------------------------------------------------
+//  TAREA DE SERVO (nucleo 0): perfil trapezoidal a 50 Hz EXACTOS => FLUIDO.
+// ---------------------------------------------------------------------------
+void servo_task(void *pv) {
+  (void)pv;
+  const TickType_t period = pdMS_TO_TICKS(1000 / SERVO_TASK_HZ);   // 20 ms
   TickType_t last_wake = xTaskGetTickCount();
   for (;;) {
     for (int i = 0; i < NUM_CH; i++) {
-      float step = MAX_SPEED_DPS[i] / (float)SMOOTH_RATE_HZ;
-      float diff = servo_target_deg[i] - servo_current_deg[i];
-      if (diff > step)       servo_current_deg[i] += step;
-      else if (diff < -step) servo_current_deg[i] -= step;
-      else                   servo_current_deg[i] = servo_target_deg[i];
-      servos[i].write((int)(servo_current_deg[i] + 0.5f));
+      float tgt = clampf(target_deg[i], JOINT_MIN_DEG[i], JOINT_MAX_DEG[i]);
+      float err = tgt - cur_deg[i];
+      if (fabsf(err) < 1e-4f) { cur_vel[i] = 0.0f; continue; }   // ya en el objetivo
+      // Velocidad con la que aun puedo frenar a 0 justo en el objetivo:
+      float v_stop = sqrtf(2.0f * MAX_ACC[i] * fabsf(err));
+      float v_des  = (err >= 0.0f ? 1.0f : -1.0f) * fminf(MAX_VEL[i], v_stop);
+      // Rampa de aceleracion (arranque/frenado gradual => fluido):
+      float dv = v_des - cur_vel[i];
+      float dvm = MAX_ACC[i] * SERVO_DT;
+      if (dv >  dvm) dv =  dvm;
+      if (dv < -dvm) dv = -dvm;
+      cur_vel[i] += dv;
+      float next = cur_deg[i] + cur_vel[i] * SERVO_DT;
+      // Deteccion de cruce: si este paso ALCANZA o PASA el objetivo, fija exacto y
+      // para (elimina overshoot y micro-oscilacion residual).
+      if ((tgt - cur_deg[i]) * (tgt - next) <= 0.0f) {
+        cur_deg[i] = tgt; cur_vel[i] = 0.0f;
+      } else {
+        cur_deg[i] = next;
+      }
+      servos[i].writeMicroseconds(deg_to_us(cur_deg[i], i));
     }
-    vTaskDelayUntil(&last_wake, period);
+    vTaskDelayUntil(&last_wake, period);        // temporizacion EXACTA (sin jitter)
+  }
+}
+
+// Callback de /joint_command (RADIANES [q1..q4, gripper]; acepta >=4).
+// Solo fija el OBJETIVO (grados); la tarea de servo lo alcanza fluido.
+void command_callback(const void *msgin) {
+  const std_msgs__msg__Float32MultiArray *msg =
+      (const std_msgs__msg__Float32MultiArray *)msgin;
+  if (msg->data.size < 4) return;
+  for (int i = 0; i < NUM_CH; i++) {
+    if ((size_t)i < msg->data.size) {
+      float q_deg = msg->data.data[i] * RAD2DEG;
+      target_deg[i] = clampf(q_deg, JOINT_MIN_DEG[i], JOINT_MAX_DEG[i]);
+    }   // si no llega el gripper (size==4) conserva su objetivo anterior
   }
 }
 
@@ -224,9 +232,9 @@ void timer_callback(rcl_timer_t *t, int64_t last) {
 
 void setup_joint_state_msg() {
   for (int i = 0; i < NUM_CH; i++) {
-    joint_names[i].data = (char *)JOINT_LABEL[i];
-    joint_names[i].size = strlen(JOINT_LABEL[i]);
-    joint_names[i].capacity = strlen(JOINT_LABEL[i]) + 1;
+    joint_names[i].data = joint_name_buf[i];
+    joint_names[i].size = strlen(joint_name_buf[i]);
+    joint_names[i].capacity = strlen(joint_name_buf[i]) + 1;
   }
   joint_state_msg.name.data = joint_names;
   joint_state_msg.name.size = NUM_CH; joint_state_msg.name.capacity = NUM_CH;
@@ -252,11 +260,23 @@ void setup() {
   for (int i = 0; i < NUM_CH; i++) {
     position_data[i] = velocity_data[i] = effort_data[i] = 0.0;
     command_data[i] = 0.0f; feedback_filtered[i] = 0.0f;
-    servo_target_deg[i] = servo_current_deg[i] = SERVO_CENTER_DEG;
+    target_deg[i] = cur_deg[i] = cur_vel[i] = 0.0f;   // arranca en HOME, quieto
   }
-  servo_target_deg[GRIPPER_INDEX] = servo_current_deg[GRIPPER_INDEX] =
-      rad_to_servo_deg(0.0f, GRIPPER_INDEX);
 
+  // Servos + posicion HOME
+  ESP32PWM::allocateTimer(0); ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2); ESP32PWM::allocateTimer(3);
+  for (int i = 0; i < NUM_CH; i++) {
+    servos[i].setPeriodHertz(50);
+    servos[i].attach(SERVO_PINS[i], SERVO_US_MIN, SERVO_US_MAX);
+    servos[i].writeMicroseconds(deg_to_us(0.0f, i));
+  }
+  delay(800);
+
+  // Lanza la TAREA DE SERVO en el nucleo 0 (aislada del micro-ROS del nucleo 1).
+  xTaskCreatePinnedToCore(servo_task, "servo_task", 4096, NULL, 2, NULL, 0);
+
+  // micro-ROS (nucleo 1, en loop)
   Serial.begin(115200);
   set_microros_transports();
   while (rmw_uros_ping_agent(1000, 1) != RMW_RET_OK) {
@@ -266,19 +286,6 @@ void setup() {
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
-
-  ESP32PWM::allocateTimer(0); ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2); ESP32PWM::allocateTimer(3);
-  for (int i = 0; i < NUM_CH; i++) {
-    servos[i].setPeriodHertz(50);
-    servos[i].attach(SERVO_PINS[i], 500, 2400);
-    servos[i].write((int)(servo_current_deg[i] + 0.5f));   // HOME
-  }
-  delay(1000);
-
-  // Tarea de suavizado (límite de velocidad) en el núcleo 0; micro-ROS gira
-  // en loop() (núcleo 1). Solo comparten servo_target_deg (volatile).
-  xTaskCreatePinnedToCore(smoothing_task, "smooth", 2048, NULL, 2, NULL, 0);
 
   allocator = rcl_get_default_allocator();
   RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
@@ -304,6 +311,7 @@ void setup() {
 }
 
 void loop() {
-  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(20)));
-  delay(1);
+  // Nucleo 1: SOLO micro-ROS (comandos + feedback). El movimiento va en su tarea.
+  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10)));
+  delay(1);   // cede CPU (evita reset por watchdog). NO quitar.
 }

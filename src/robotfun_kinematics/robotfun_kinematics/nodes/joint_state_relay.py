@@ -5,7 +5,7 @@ joint_state_relay.py
 ====================
 
 Puente de SIMULACIÓN: hace de "ESP32 virtual". Reenvía los comandos
-``/joint_command`` (Float32MultiArray [q1..q5, gripper], RADIANES) como
+``/joint_command`` (Float32MultiArray [q1..q4, gripper], RADIANES) como
 ``/joint_states`` (JointState), de modo que en RViz el robot siga a la IK SIN
 hardware.
 

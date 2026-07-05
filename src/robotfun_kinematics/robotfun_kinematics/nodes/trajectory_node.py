@@ -4,21 +4,24 @@
 trajectory_node.py
 ==================
 
-Control cinemático con PERFIL TRAPEZOIDAL (movimiento suave en lazo abierto)
-para el brazo de 5 juntas + gripper.
+Control cinemático con PERFIL TRAPEZOIDAL en el lado ROS para el brazo de
+4 GDL + gripper.
+
+NOTA: el firmware definitivo del ESP32 YA suaviza cada objetivo con su propia
+tarea de tiempo real (perfil trapezoidal a 50 Hz). Este nodo es OPCIONAL:
+sirve cuando quieres una RECTA CARTESIANA real (el firmware suaviza en
+espacio articular, no en cartesiano) o para sincronizar varias juntas con
+tiempos exactos en simulación.
 
 Dos modos de objetivo:
-  1) ARTICULAR  : /joint_goal (Float32MultiArray [q1..q5, gripper], RADIANES)
+  1) ARTICULAR  : /joint_goal (Float32MultiArray [q1..q4, gripper], RADIANES)
                   → interpolación trapezoidal sincronizada en espacio articular.
   2) CARTESIANO : /target_pose (Pose) → recta cartesiana con perfil trapezoidal;
                   en cada paso integra  q += J⁺(q)·dx  (control diferencial con
                   pseudo-inversa amortiguada). Respeta el área de trabajo.
 
-Con ``lock_joint_4:=true`` (defecto) la columna del roll se congela y joint_4
-se mantiene en 0, igual que en la IK.
-
 Salida: /joint_command (Float32MultiArray, RADIANES) — stream fino
-[q1..q5, gripper] a ``control_rate`` Hz hacia el ESP32 (o el relay en sim).
+[q1..q4, gripper] a ``control_rate`` Hz.
 """
 
 import numpy as np
@@ -29,8 +32,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray
 
 from robotfun_kinematics.core import (
-    ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, N_JOINTS, ROBOT, ROLL_INDEX,
-    WorkspaceLimits, clamp_target,
+    ARM_JOINT_NAMES, GRIPPER_JOINT_NAME, N_JOINTS, ROBOT, WorkspaceLimits,
+    clamp_target,
 )
 from robotfun_kinematics.core.trajectory import joint_trajectory, trapezoidal_profile
 
@@ -45,10 +48,8 @@ class TrajectoryNode(Node):
         self.declare_parameter("v_max_cart", 0.08)  # m/s cartesiano
         self.declare_parameter("a_max_cart", 0.15)  # m/s²
         self.declare_parameter("damping", 0.06)     # λ del J⁺ amortiguado
-        self.declare_parameter("lock_joint_4", True)
 
         self.rate = float(self.get_parameter("control_rate").value)
-        self.lock_j4 = bool(self.get_parameter("lock_joint_4").value)
         self.limits = WorkspaceLimits()
 
         self.q_arm = np.zeros(N_JOINTS)
@@ -64,9 +65,9 @@ class TrajectoryNode(Node):
         self.timer = self.create_timer(1.0 / self.rate, self.stream_cb)
 
         self.get_logger().info(
-            f"trajectory_node listo (trapezoidal, lock_joint_4={self.lock_j4}).\n"
+            "trajectory_node (4 GDL) listo (trapezoidal).\n"
             "  articular : ros2 topic pub /joint_goal std_msgs/msg/Float32MultiArray "
-            "\"{data: [q1,q2,q3,q4,q5,gripper]}\"\n"
+            "\"{data: [q1,q2,q3,q4,gripper]}\"\n"
             "  cartesiano: ros2 topic pub /target_pose geometry_msgs/msg/Pose ...")
 
     def joint_state_cb(self, msg: JointState):
@@ -83,11 +84,9 @@ class TrajectoryNode(Node):
         data = list(msg.data)
         if len(data) < N_JOINTS:
             self.get_logger().warn(
-                f"Se requieren al menos {N_JOINTS} ángulos [q1..q5(,gripper)].")
+                f"Se requieren al menos {N_JOINTS} ángulos [q1..q4(,gripper)].")
             return
         q_goal = ROBOT.clamp(np.array(data[:N_JOINTS]))
-        if self.lock_j4:
-            q_goal[ROLL_INDEX] = 0.0
         grip_goal = float(data[N_JOINTS]) if len(data) > N_JOINTS else self.gripper
         v_max = float(self.get_parameter("v_max").value)
         a_max = float(self.get_parameter("a_max").value)
@@ -106,11 +105,7 @@ class TrajectoryNode(Node):
         a_max = float(self.get_parameter("a_max_cart").value)
         lam2 = float(self.get_parameter("damping").value) ** 2
 
-        active = ([i for i in range(N_JOINTS) if i != ROLL_INDEX]
-                  if self.lock_j4 else list(range(N_JOINTS)))
         q = self.q_arm.copy()
-        if self.lock_j4:
-            q[ROLL_INDEX] = 0.0
         x0 = ROBOT.fkine(q)[0:3, 3]
         dist = float(np.linalg.norm(x_goal - x0))
         s_list = trapezoidal_profile(dist, v_max, a_max, self.rate)
@@ -119,10 +114,9 @@ class TrajectoryNode(Node):
         s_prev = 0.0
         for s in s_list:
             dx = (s - s_prev) * (x_goal - x0)
-            J = ROBOT.jacobian_position(q)[:, active]
+            J = ROBOT.jacobian_position(q)              # 3 x 4
             dq = J.T @ np.linalg.solve(J @ J.T + lam2 * np.eye(3), dx)
-            q[active] = q[active] + dq
-            q = ROBOT.clamp(q)
+            q = ROBOT.clamp(q + dq)
             traj.append(np.hstack((q, self.gripper)))
             s_prev = s
         self.traj = traj

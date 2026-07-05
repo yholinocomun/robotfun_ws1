@@ -4,9 +4,9 @@
   <name>robotfun_firmware</name>
   <version>0.2.0</version>
   <description>
-    Firmware ESP32 micro-ROS del brazo RobotFun (6 canales: 5 juntas + gripper;
-    joint_4 bloqueable) y launch del micro-ROS Agent. El .ino se compila con
-    Arduino IDE, no con colcon.
+    Firmware ESP32 micro-ROS definitivo del brazo RobotFun (5 canales: 4 GDL +
+    gripper; movimiento fluido con tarea FreeRTOS de tiempo real) y launch del
+    micro-ROS Agent. El .ino se compila con Arduino IDE, no con colcon.
   </description>
   <maintainer email="yholicomun@gmail.com">yholi</maintainer>
   <license>MIT</license>

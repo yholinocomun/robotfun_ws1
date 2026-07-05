@@ -16,9 +16,8 @@ vez (sliders + relay, sliders + ESP32, …). El argumento ``mode`` garantiza una
 
 Otros argumentos:
   model:=primitives|meshes       modelo a visualizar (primitives = DH-exacto).
-  controller:=ik|trajectory      controlador (modos sim/hardware).
-  lock_joint_4:=true|false       modo A (roll bloqueado) / modo B (roll activo).
-                                 DEBE coincidir con JOINT4_LOCKED del firmware.
+  controller:=ik|trajectory      controlador (modos sim/hardware). Con
+                                 hardware, 'ik' basta: el ESP32 suaviza.
   method:=analytic|dls|newton|gradient ; approach_deg:=-90
 
 IMPORTANTE: no lances display.launch.py a la vez que este bringup (duplicarías
@@ -44,7 +43,6 @@ def generate_launch_description():
     model = DeclareLaunchArgument("model", default_value="primitives")
     mode = DeclareLaunchArgument("mode", default_value="sim")
     controller = DeclareLaunchArgument("controller", default_value="ik")
-    lock_joint_4 = DeclareLaunchArgument("lock_joint_4", default_value="true")
     method = DeclareLaunchArgument("method", default_value="analytic")
     approach_deg = DeclareLaunchArgument("approach_deg", default_value="-90.0")
 
@@ -81,7 +79,6 @@ def generate_launch_description():
             PathJoinSubstitution([kin_pkg, "launch", "kinematics.launch.py"])),
         launch_arguments={
             "controller": LaunchConfiguration("controller"),
-            "lock_joint_4": LaunchConfiguration("lock_joint_4"),
             "method": LaunchConfiguration("method"),
             "approach_deg": LaunchConfiguration("approach_deg"),
         }.items(),
@@ -89,6 +86,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        model, mode, controller, lock_joint_4, method, approach_deg,
+        model, mode, controller, method, approach_deg,
         rsp, rviz, relay, jsp_gui, kinematics,
     ])

@@ -4,52 +4,49 @@
 dh_model.py
 ===========
 
-Modelo cinemático del brazo **5 juntas (yaw, pitch, pitch, roll, pitch) +
-gripper** en convención **Denavit-Hartenberg estándar**. Capa de dominio
-(Clean Architecture): NO depende de ROS y se ejecuta/testea aislada:
+Modelo cinemático del robot **4 GDL (yaw + 3 pitch) + gripper** en convención
+**Denavit-Hartenberg estándar**. Capa de dominio (Clean Architecture): NO
+depende de ROS y se ejecuta/testea aislada:
 
     python3 -m robotfun_kinematics.core.dh_model
 
-Estructura física real
-----------------------
+Estructura física DEFINITIVA (coincide con el firmware del ESP32)
+-----------------------------------------------------------------
     joint_1 : yaw de base
     joint_2 : pitch de hombro
     joint_3 : pitch de codo
-    joint_4 : ROLL de muñeca (eje colineal con el antebrazo)
-    joint_5 : pitch de pinza
-    gripper : apertura/cierre (no afecta a la FK del TCP)
+    joint_4 : pitch de muñeca/pinza
+    gripper : apertura/cierre (canal 5 del firmware; no afecta a la FK)
 
-El espacio de TAREA útil tiene 4 dimensiones (posición + dirección de
-aproximación en el plano). Por eso el robot se opera por defecto con
-**joint_4 BLOQUEADO a 0 rad (servo a 90°) → 4 GDL efectivos** con IK
-analítica cerrada, y opcionalmente con joint_4 ACTIVO (5 GDL) para
-orientar la pinza fuera del plano (ver ``ik_solver``).
+El antiguo ROLL de muñeca se retiró del hardware; su canal (servo GPIO 18 /
+pot GPIO 35) se reutilizó para el pitch de muñeca. Un brazo yaw + 3 pitch
+coplanares tiene **IK analítica cerrada** (ver ``ik_solver``): la tarea es
+posición (3) + ángulo de aproximación φ (1) = sistema cuadrado de 4 GDL.
 
-Medidas reales (tabla DH del usuario; metros):
-    L0 = 0.010   offset radial de la base (a_1)
-    L1 = 0.063   base → eje de pitch del hombro (d_1)
-    L2 = 0.120   hombro → codo (brazo)
-    L3 = 0.090   codo → servo de roll
-    L4 = 0.030   servo de roll → eje de pitch de la pinza
-    L5 = 0.090   eje de pitch de la pinza → punta del gripper (TCP)
+Medidas reales (tabla DH del usuario; metros). Brazo RECTO con un pequeño
+offset radial L0 en la base:
+    L0   = 0.010     offset radial de la base (a_1)
+    L1   = 0.063     base → eje de pitch del hombro (d_1)
+    L2   = 0.120     hombro → codo (brazo)
+    A3   = 0.120     codo → muñeca (antebrazo, = L3+L4 unificados)
+    HAND = 0.090     muñeca → punta del gripper (= L5)
 
-Tabla DH estándar (validada numéricamente; θ_i = q_i + θoff_i):
+Tabla DH estándar (4 juntas; θ_i = q_i + θoff_i):
 
-    i | d_i   | θ_i      | α_i  | a_i
-    --|-------|----------|------|-----
-    1 | L1    | q1       | +90° | L0
-    2 | 0     | q2 + 90° |   0° | L2
-    3 | 0     | q3 + 90° | +90° | 0
-    4 | L3+L4 | q4       | +90° | 0
-    5 | 0     | q5 + 90° |   0° | L5
+    i | d_i | θ_i      | α_i  | a_i
+    --|-----|----------|------|------
+    1 | L1  | q1       | +90° | L0
+    2 | 0   | q2 + 90° |  0°  | L2
+    3 | 0   | q3       |  0°  | A3
+    4 | 0   | q4       |  0°  | HAND
 
 Propiedades verificadas (tests en ``test/test_kinematics.py``):
   * HOME (q=0, servos a 90°): brazo recto vertical,
     FK(HOME) → TCP = [0.010, 0, 0.393] m.
-  * joint_4 es roll PURO: girarlo en HOME no traslada el TCP.
   * La pinza apunta por el **eje X del frame final** (en HOME, hacia +Z).
   * El URDF de primitivas reproduce esta FK exactamente (TF == FK) con ejes
-    j1=(0,0,1)  j2=j3=(0,-1,0)  j4=(0,0,1)  j5=(0,+1,0).
+    j1=(0,0,1) y j2=j3=j4=(0,-1,0).
+  * Ángulo de aproximación: φ = π/2 + q2 + q3 + q4.
 """
 
 from __future__ import annotations
@@ -68,20 +65,18 @@ pi = np.pi
 L0 = 0.010              # offset radial de la base (a_1)
 L1 = 0.063              # base → eje de pitch del hombro (d_1)
 L2 = 0.120              # brazo (hombro → codo)
-L3 = 0.090              # codo → servo de roll
-L4 = 0.030              # servo de roll → eje de pitch de la pinza
-L5 = 0.090              # eje de pitch de la pinza → punta del gripper (TCP)
-A3 = L3 + L4            # antebrazo completo (codo → muñeca) = d_4
+L3 = 0.090              # codo → (antiguo) servo de roll
+L4 = 0.030              # (antiguo) servo de roll → eje de pitch de muñeca
+L5 = 0.090              # eje de pitch de muñeca → punta del gripper (TCP)
+A3 = L3 + L4            # antebrazo completo (codo → muñeca) = 0.120
+HAND = L5               # mano (muñeca → TCP) = 0.090
 
 # Offsets θ para que q=0 == HOME (brazo RECTO y vertical, servos a 90°).
-THETA_OFFSET = np.array([0.0, pi / 2.0, pi / 2.0, 0.0, pi / 2.0])
+THETA_OFFSET = np.array([0.0, pi / 2.0, 0.0, 0.0])
 
 #: Nombres canónicos. DEBEN coincidir con URDF, firmware y /joint_states.
-ARM_JOINT_NAMES = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5"]
+ARM_JOINT_NAMES = ["joint_1", "joint_2", "joint_3", "joint_4"]
 GRIPPER_JOINT_NAME = "gripper"
-
-#: Índice del roll de muñeca dentro de q (para bloquearlo/activarlo).
-ROLL_INDEX = 3
 
 
 def dh(d: float, theta: float, a: float, alpha: float) -> np.ndarray:
@@ -168,20 +163,20 @@ class DHChain:
 
     @property
     def link_fore(self) -> float:
-        return float(self.d[3])          # A3 = L3 + L4
+        return float(self.a[2])          # A3
 
     @property
     def link_hand(self) -> float:
-        return float(self.a[4])          # L5
+        return float(self.a[3])          # HAND
 
 
 def build_default_robot() -> DHChain:
-    """Construye la cadena DH validada del robot (5 juntas)."""
-    n = 5
+    """Construye la cadena DH validada del robot (4 GDL)."""
+    n = 4
     return DHChain(
-        d=np.array([L1, 0.0, 0.0, A3, 0.0]),
-        a=np.array([L0, L2, 0.0, 0.0, L5]),
-        alpha=np.array([pi / 2.0, 0.0, pi / 2.0, pi / 2.0, 0.0]),
+        d=np.array([L1, 0.0, 0.0, 0.0]),
+        a=np.array([L0, L2, A3, HAND]),
+        alpha=np.array([pi / 2.0, 0.0, 0.0, 0.0]),
         theta_offset=THETA_OFFSET.copy(),
         q_min=np.array([-pi / 2.0] * n),   # servos saturados a ±90°
         q_max=np.array([pi / 2.0] * n),
@@ -189,7 +184,7 @@ def build_default_robot() -> DHChain:
 
 
 ROBOT: DHChain = build_default_robot()
-N_JOINTS: int = ROBOT.n_joints           # 5 juntas de brazo (sin gripper)
+N_JOINTS: int = ROBOT.n_joints           # 4 juntas de brazo (sin gripper)
 
 
 def fkine(q, **kw):
@@ -210,12 +205,8 @@ if __name__ == "__main__":
     print("FK(HOME) — brazo recto y vertical (tabla DH del usuario):")
     print("  hombro :", np.round(fr[0][:3, 3], 4), " esperado (0.010, 0, 0.063)")
     print("  codo   :", np.round(fr[1][:3, 3], 4), " esperado (0.010, 0, 0.183)")
-    print("  muñeca :", np.round(fr[3][:3, 3], 4), " esperado (0.010, 0, 0.303)")
-    print("  TCP    :", np.round(fr[4][:3, 3], 4), " esperado (0.010, 0, 0.393)")
-    print("  pinza apunta (eje X final):", np.round(fr[4][:3, 0], 4), " esperado (0, 0, 1)")
-    print("\njoint_4 es roll puro (TCP no se mueve en HOME):")
-    for q4 in (-pi / 2, -pi / 4, pi / 4, pi / 2):
-        p = ROBOT.tool_position([0, 0, 0, q4, 0])
-        print(f"  q4={np.degrees(q4):6.1f}°  TCP={np.round(p, 5)}")
-    print(f"\nalcance máx desde el hombro = L2+A3+L5 = {L2 + A3 + L5:.4f} m")
+    print("  muñeca :", np.round(fr[2][:3, 3], 4), " esperado (0.010, 0, 0.303)")
+    print("  TCP    :", np.round(fr[3][:3, 3], 4), " esperado (0.010, 0, 0.393)")
+    print("  pinza apunta (eje X final):", np.round(fr[3][:3, 0], 4), " esperado (0, 0, 1)")
+    print(f"\nalcance máx desde el hombro = L2+A3+HAND = {L2 + A3 + HAND:.4f} m")
     print("θ offsets (deg):", np.round(np.degrees(ROBOT.theta_offset), 2))

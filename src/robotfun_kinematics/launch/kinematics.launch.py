@@ -1,13 +1,14 @@
 """
-Lanza la cinemática de alto nivel (5 juntas + gripper, modos bloqueado/roll).
+Lanza la cinemática de alto nivel (robot 4 GDL + gripper).
 
 Un único controlador publica en /joint_command a la vez (``controller``):
-  * controller:=trajectory  → control suave con perfil trapezoidal (recom. HW).
-  * controller:=ik          → IK directa "salto a la pose".
+  * controller:=ik          → IK directa (el firmware del ESP32 suaviza el
+                              movimiento con su perfil trapezoidal). Recomendado.
+  * controller:=trajectory  → perfil trapezoidal en el lado ROS (útil para
+                              rectas cartesianas o en simulación).
 fk_check_node siempre se ejecuta (valida TF ↔ FK publicando /fk_pose).
 
 Argumentos:
-  lock_joint_4:=true|false   modo A (roll bloqueado, defecto) o modo B (activo).
   method:=analytic|dls|newton|gradient   método de IK (analytic recomendado).
   approach_deg:=-90          ángulo de aproximación de la pinza (grados).
 """
@@ -22,11 +23,8 @@ from launch_ros.actions import Node
 def generate_launch_description():
     controller = DeclareLaunchArgument(
         "controller", default_value="ik",
-        description="Controlador de alto nivel: 'ik' (directo) o 'trajectory' (suave).")
-    lock_joint_4 = DeclareLaunchArgument(
-        "lock_joint_4", default_value="true",
-        description="true: roll bloqueado (4 GDL efectivos, IK analítica); "
-                    "false: roll activo (DLS).")
+        description="Controlador de alto nivel: 'ik' (directo, el ESP32 suaviza) "
+                    "o 'trajectory' (perfil en ROS).")
     method = DeclareLaunchArgument(
         "method", default_value="analytic",
         description="Método de IK: analytic | dls | newton | gradient.")
@@ -43,18 +41,16 @@ def generate_launch_description():
         name="fk_check_node", output="screen")
     trajectory_node = Node(
         package="robotfun_kinematics", executable="trajectory_node",
-        name="trajectory_node", output="screen", condition=is_traj,
-        parameters=[{"lock_joint_4": LaunchConfiguration("lock_joint_4")}])
+        name="trajectory_node", output="screen", condition=is_traj)
     ik_node = Node(
         package="robotfun_kinematics", executable="ik_node", name="ik_node",
         output="screen", condition=is_ik,
         parameters=[{
-            "lock_joint_4": LaunchConfiguration("lock_joint_4"),
             "method": LaunchConfiguration("method"),
             "approach_deg": LaunchConfiguration("approach_deg"),
         }])
 
     return LaunchDescription([
-        controller, lock_joint_4, method, approach_deg,
+        controller, method, approach_deg,
         fk_check_node, trajectory_node, ik_node,
     ])

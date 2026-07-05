@@ -19,8 +19,8 @@ setup(
     zip_safe=True,
     maintainer="yholi",
     maintainer_email="yholicomun@gmail.com",
-    description="Cinemática directa/inversa (DH estándar, 5 juntas + gripper; "
-                "modos joint_4 bloqueado/activo) del brazo RobotFun.",
+    description="Cinemática directa/inversa (DH estándar, 4 GDL + gripper) "
+                "del brazo RobotFun + secuenciador de pick & place.",
     license="MIT",
     tests_require=["pytest"],
     entry_points={
@@ -29,6 +29,7 @@ setup(
             "fk_check_node = robotfun_kinematics.nodes.fk_check_node:main",
             "trajectory_node = robotfun_kinematics.nodes.trajectory_node:main",
             "joint_state_relay = robotfun_kinematics.nodes.joint_state_relay:main",
+            "pick_place_node = robotfun_kinematics.nodes.pick_place_node:main",
         ],
     },
 )

@@ -29,10 +29,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .dh_model import A3, L0, L2, L5, ROBOT, DHChain
+from .dh_model import A3, HAND, L0, L2, ROBOT, DHChain
 
 #: Alcance radial máximo físico desde el eje del hombro (m).
-R_MAX_PHYSICAL = L0 + L2 + A3 + L5      # 0.010 + 0.120 + 0.120 + 0.090 = 0.340
+R_MAX_PHYSICAL = L0 + L2 + A3 + HAND    # 0.010 + 0.120 + 0.120 + 0.090 = 0.340
 
 
 @dataclass

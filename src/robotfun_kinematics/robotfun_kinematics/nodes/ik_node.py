@@ -4,26 +4,20 @@
 ik_node.py
 ==========
 
-Nodo ROS 2 de cinemática inversa (5 juntas + gripper, modos bloqueado/roll).
+Nodo ROS 2 de cinemática inversa para el robot de **4 GDL + gripper**.
 
-    /target_pose      (geometry_msgs/Pose)      — posición deseada del TCP; si
-                                                  la orientación NO es identidad,
-                                                  su eje X se usa como dirección
-                                                  de apuntado (modo roll).
-    /gripper_command  (std_msgs/Float32)        — apertura del gripper (rad)
-    /joint_states     (sensor_msgs/JointState)  — realimentación (semilla IK)
+    /target_pose      (geometry_msgs/Pose)        — posición cartesiana deseada
+    /gripper_command  (std_msgs/Float32)          — apertura del gripper (rad)
+    /joint_states     (sensor_msgs/JointState)    — realimentación (semilla)
               |
-              v   IK (analítica cerrada en modo bloqueado; DLS en modo roll)
+              v   IK (analítica cerrada por defecto; numérica opcional)
               |
     /joint_command    (std_msgs/Float32MultiArray, RADIANES)
-                      [joint_1, joint_2, joint_3, joint_4, joint_5, gripper] → ESP32
+                      [q1, q2, q3, q4, gripper] → ESP32 (que suaviza el movimiento)
 
 Parámetros
 ----------
-lock_joint_4  : true (defecto) → modo A, roll bloqueado a 0 (4 GDL efectivos,
-                IK analítica). false → modo B, roll activo (DLS, posición +
-                dirección de apuntado 3D).
-method        : "analytic" (recom. en modo bloqueado) | "dls" | "newton" | "gradient".
+method        : "analytic" (recom.) | "dls" | "newton" | "gradient".
 approach_deg  : ángulo de aproximación φ en grados (−90 = pinza hacia abajo).
 damping       : λ del DLS (rad).
 enforce_workspace, ws_x/ws_y/ws_z : área de trabajo segura (ver workspace.py).
@@ -37,8 +31,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32, Float32MultiArray
 
 from robotfun_kinematics.core import (
-    ARM_JOINT_NAMES, N_JOINTS, ROLL_INDEX, WorkspaceLimits, clamp_target,
-    fkine, quat_to_rot, solve_ik, validate_target,
+    ARM_JOINT_NAMES, N_JOINTS, WorkspaceLimits, clamp_target, fkine,
+    solve_ik, validate_target,
 )
 
 
@@ -46,7 +40,6 @@ class IKNode(Node):
     def __init__(self):
         super().__init__("ik_node")
 
-        self.declare_parameter("lock_joint_4", True)
         self.declare_parameter("method", "analytic")
         self.declare_parameter("approach_deg", -90.0)
         self.declare_parameter("damping", 0.05)
@@ -56,7 +49,6 @@ class IKNode(Node):
         self.declare_parameter("ws_y", [-0.30, 0.30])
         self.declare_parameter("ws_z", [0.02, 0.42])
 
-        self.lock_j4 = bool(self.get_parameter("lock_joint_4").value)
         self.method = str(self.get_parameter("method").value)
         self.approach = np.radians(float(self.get_parameter("approach_deg").value))
         self.damping = float(self.get_parameter("damping").value)
@@ -75,10 +67,8 @@ class IKNode(Node):
         self.create_subscription(Float32, "/gripper_command", self.gripper_cb, 10)
         self.create_subscription(JointState, "/joint_states", self.joint_state_cb, 10)
 
-        modo = "A: joint_4 BLOQUEADO (4 GDL efectivos)" if self.lock_j4 \
-            else "B: joint_4 ACTIVO (roll)"
         self.get_logger().info(
-            f"ik_node listo | modo {modo} | método={self.method} "
+            f"ik_node (4 GDL) listo | método={self.method} "
             f"φ={np.degrees(self.approach):.0f}° "
             f"workspace={'ON' if self.enforce_ws else 'OFF'}. "
             "Publica una posición en /target_pose.")
@@ -107,21 +97,8 @@ class IKNode(Node):
             else:
                 self.get_logger().warn(f"objetivo fuera del área de trabajo ({reason}).")
 
-        # Si la Pose trae orientación explícita (no identidad), su eje X define
-        # la dirección de apuntado (requiere modo roll para salir del plano).
-        o = msg.orientation
-        direction = None
-        if abs(o.x) + abs(o.y) + abs(o.z) > 1e-6:
-            direction = quat_to_rot(o.x, o.y, o.z, o.w)[:, 0]
-            if self.lock_j4:
-                self.get_logger().warn(
-                    "orientación recibida con joint_4 bloqueado: solo se podrá "
-                    "apuntar dentro del plano del brazo (lanza con "
-                    "lock_joint_4:=false para dirección 3D).")
-
         res = solve_ik(x_des, self.q_current, approach=self.approach,
-                       direction=direction, method=self.method,
-                       lock_joint_4=self.lock_j4, damping=self.damping)
+                       method=self.method, damping=self.damping)
         if not res.ok:
             self.get_logger().warn(
                 f"IK no resolvió ({res.reason}); se publica la mejor solución.")
@@ -132,8 +109,7 @@ class IKNode(Node):
         x_chk = fkine(res.q)[0:3, 3]
         self.get_logger().info(
             f"objetivo {np.round(x_des, 4)} → q(deg) {np.round(np.degrees(res.q), 1)} "
-            f"| FK={np.round(x_chk, 4)} err={res.error:.2e} "
-            f"({res.method}/{res.mode}, q4={np.degrees(res.q[ROLL_INDEX]):.1f}°)")
+            f"| FK={np.round(x_chk, 4)} err={res.error:.2e} ({res.method})")
 
     def publish_command(self, q):
         out = Float32MultiArray()

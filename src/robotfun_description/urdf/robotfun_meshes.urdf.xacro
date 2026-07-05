@@ -5,20 +5,16 @@
      Visualización del robot real con las piezas del CAD (STL de brazo_ws, con
      eslabon3 re-exportado y piezas unidas). Usa los orígenes de brazo.urdf
      (donde las mallas están alineadas) y la MISMA interfaz de juntas
-     (joint_1..joint_5 + gripper) y los MISMOS sentidos de giro que el modelo
-     primitivo, de modo que el mismo /joint_states mueve ambos modelos.
+     (joint_1..joint_4 + gripper implícito en eslabon4) que el modelo
+     primitivo, con los pitch en axis="0 -1 0" para el mismo sentido de giro.
+     Lo mueve el mismo /joint_states ⇒ la IK mueve también este modelo.
 
-     joint_4 (ROLL) se inserta en la muñeca con eje vertical en HOME (colineal
-     con el antebrazo): rota el conjunto muñeca+gripper (eslabon4) sobre sí
-     mismo. El eslabón portador link_4 no tiene visual (el CAD no tiene pieza
-     separada para el roll).
-
-     NOTA IMPORTANTE: las proporciones del CAD difieren de la tabla DH
-     (muñeca CAD a z=0.3865 vs 0.303 del DH; el offset x=0.038 del CAD es una
-     pieza descentrada del diseño original). El modelo PRIMITIVO
-     (model:=primitives) es la ÚNICA referencia válida para verificar
-     cinemática (TF == FK); este modelo es para VER el hardware. Si quieres
-     TF==FK también aquí, re-exporta las mallas a las longitudes L0..L5.
+     NOTA: las proporciones del CAD difieren de la tabla DH (muñeca CAD a
+     z=0.3865 vs 0.303 del DH; offset x=0.038 = pieza descentrada del diseño
+     original). El modelo PRIMITIVO (model:=primitives) es la ÚNICA referencia
+     válida para verificar cinemática (TF == FK); este modelo es para VER el
+     hardware. El gripper real es parte de eslabon4 (piezas unidas): no tiene
+     junta 'gripper' propia en este modelo.
      ========================================================================== -->
 <robot name="robotfun_meshes" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
@@ -78,23 +74,12 @@
     </visual>
   </link>
 
-  <!-- joint_4: ROLL de muñeca (nuevo respecto a brazo.urdf). El eje pasa por
-       el centro de la muñeca del CAD (x=0.038 en el frame de link_3: pieza
-       descentrada del diseño original) y es vertical en HOME. -->
   <joint name="joint_4" type="revolute">
     <origin xyz="0.038 0 0.1213" rpy="0 0 0"/><parent link="link_3"/><child link="link_4"/>
-    <axis xyz="0 0 1"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+    <axis xyz="0 -1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
   </joint>
-  <!-- link_4: portador del roll (el CAD no tiene pieza separada) -->
-  <link name="link_4"/>
-
-  <!-- joint_5: pitch de pinza. Eje +Y, igual que el modelo primitivo/DH. -->
-  <joint name="joint_5" type="revolute">
-    <origin xyz="0 0 0" rpy="0 0 0"/><parent link="link_4"/><child link="link_5"/>
-    <axis xyz="0 1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
-  </joint>
-  <!-- link_5 = eslabon4 del CAD (muñeca + gripper unidos en una pieza) -->
-  <link name="link_5">
+  <!-- link_4 = eslabon4 (muñeca + gripper unidos: un solo eslabón) -->
+  <link name="link_4">
     <visual>
       <origin xyz="-0.038 0 -0.3865" rpy="0 0 0"/>
       <geometry><mesh filename="${mesh}/eslabon4_link.stl" scale="0.001 0.001 0.001"/></geometry>
@@ -102,9 +87,9 @@
     </visual>
   </link>
 
-  <!-- tool0 = TCP (punta del gripper, L5=0.090). Solo frame. -->
+  <!-- tool0 = TCP (punta del gripper, HAND=L5=0.090). Solo frame. -->
   <joint name="tool_fixed" type="fixed">
-    <origin xyz="0 0 0.090" rpy="0 0 0"/><parent link="link_5"/><child link="tool0"/>
+    <origin xyz="0 0 0.090" rpy="0 0 0"/><parent link="link_4"/><child link="tool0"/>
   </joint>
   <link name="tool0"/>
 

@@ -2,9 +2,9 @@
 <!-- ============================================================================
      robotfun.urdf.xacro  —  MODELO DE MEDIDAS REALES (primitivas, tabla DH)
      ===========================================================================
-     Brazo de 5 juntas (yaw, pitch, pitch, ROLL, pitch) + gripper, con
-     PRIMITIVAS a las medidas de la tabla DH:
-         L0=0.010 L1=0.063 L2=0.120 L3=0.090 L4=0.030 L5=0.090  [m]
+     Brazo 4 GDL RECTO (yaw + 3 pitch) + gripper, con PRIMITIVAS a las medidas
+     de la tabla DH:
+         L0=0.010 L1=0.063 L2=0.120 A3=0.120 HAND=0.090  [m]
      Reproduce EXACTAMENTE la FK del núcleo (TF == FK): es el modelo canónico
      para VERIFICAR el DH y la cinemática inversa.
      Para ver las piezas reales del CAD:  model:=meshes
@@ -17,8 +17,8 @@
 
   <xacro:robotfun_arm/>
 
-  <!-- gripper (canal 6) en la mano, cerca de la punta -->
-  <xacro:gripper_primitive parent="link_5">
+  <!-- gripper (canal 5 del firmware) en la mano, cerca de la punta -->
+  <xacro:gripper_primitive parent="link_4">
     <origin xyz="0 0 0.055" rpy="0 0 0"/>
   </xacro:gripper_primitive>
 

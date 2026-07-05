@@ -4,10 +4,10 @@
   <name>robotfun_kinematics</name>
   <version>0.2.0</version>
   <description>
-    Cinemática del brazo RobotFun (5 juntas + gripper): núcleo puro sin ROS
-    (DH estándar, FK, Jacobiano, IK analítica y numérica DLS/Newton/gradiente,
-    trayectorias trapezoidales, área de trabajo) + nodos ROS 2 adaptadores.
-    Modos de operación: joint_4 (roll) bloqueado o activo.
+    Cinemática del brazo RobotFun (4 GDL + gripper): núcleo puro sin ROS
+    (DH estándar, FK, Jacobiano, IK analítica cerrada y numérica
+    DLS/Newton/gradiente, trayectorias trapezoidales, área de trabajo) +
+    nodos ROS 2 adaptadores + secuenciador de pick &amp; place.
   </description>
   <maintainer email="yholicomun@gmail.com">yholi</maintainer>
   <license>MIT</license>

@@ -4,7 +4,7 @@
   <name>robotfun_description</name>
   <version>0.2.0</version>
   <description>
-    Descripción URDF/xacro del brazo RobotFun (5 juntas + gripper):
+    Descripción URDF/xacro del brazo RobotFun (4 GDL + gripper):
     modelo de medidas reales (primitivas, TF == FK con la tabla DH) y modelo
     de piezas reales (meshes del CAD), con la misma interfaz de juntas.
   </description>
