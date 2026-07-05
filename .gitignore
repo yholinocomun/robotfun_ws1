@@ -1,0 +1,13 @@
+# Artefactos de colcon
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Temporales del verificador de xacro
+.verify_expanded.urdf.xacro
+.chk_*

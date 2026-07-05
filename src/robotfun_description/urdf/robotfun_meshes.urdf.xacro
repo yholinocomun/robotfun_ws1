@@ -1,0 +1,111 @@
+<?xml version="1.0"?>
+<!-- ============================================================================
+     robotfun_meshes.urdf.xacro  —  MODELO DE PIEZAS REALES (meshes del CAD)
+     ===========================================================================
+     Visualización del robot real con las piezas del CAD (STL de brazo_ws, con
+     eslabon3 re-exportado y piezas unidas). Usa los orígenes de brazo.urdf
+     (donde las mallas están alineadas) y la MISMA interfaz de juntas
+     (joint_1..joint_5 + gripper) y los MISMOS sentidos de giro que el modelo
+     primitivo, de modo que el mismo /joint_states mueve ambos modelos.
+
+     joint_4 (ROLL) se inserta en la muñeca con eje vertical en HOME (colineal
+     con el antebrazo): rota el conjunto muñeca+gripper (eslabon4) sobre sí
+     mismo. El eslabón portador link_4 no tiene visual (el CAD no tiene pieza
+     separada para el roll).
+
+     NOTA IMPORTANTE: las proporciones del CAD difieren de la tabla DH
+     (muñeca CAD a z=0.3865 vs 0.303 del DH; el offset x=0.038 del CAD es una
+     pieza descentrada del diseño original). El modelo PRIMITIVO
+     (model:=primitives) es la ÚNICA referencia válida para verificar
+     cinemática (TF == FK); este modelo es para VER el hardware. Si quieres
+     TF==FK también aquí, re-exporta las mallas a las longitudes L0..L5.
+     ========================================================================== -->
+<robot name="robotfun_meshes" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find robotfun_description)/urdf/common/materials.xacro"/>
+  <xacro:property name="mesh" value="package://robotfun_description/meshes/arm"/>
+  <xacro:property name="lo" value="-1.5708"/>
+  <xacro:property name="hi" value="1.5708"/>
+
+  <link name="world"/>
+  <joint name="base_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0"/><parent link="world"/><child link="base_link"/>
+  </joint>
+
+  <link name="base_link">
+    <inertial><mass value="1.0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="${mesh}/base_link.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="grey"/>
+    </visual>
+  </link>
+
+  <joint name="joint_1" type="revolute">
+    <origin xyz="0 0 0.0617" rpy="0 0 0"/><parent link="base_link"/><child link="link_1"/>
+    <axis xyz="0 0 1"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+  </joint>
+  <link name="link_1">
+    <visual>
+      <origin xyz="0 0 -0.0617" rpy="0 0 0"/>
+      <geometry><mesh filename="${mesh}/eslabon1_link.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="white_grey"/>
+    </visual>
+  </link>
+
+  <joint name="joint_2" type="revolute">
+    <origin xyz="0 0 0.0758" rpy="0 0 0"/><parent link="link_1"/><child link="link_2"/>
+    <axis xyz="0 -1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+  </joint>
+  <link name="link_2">
+    <visual>
+      <origin xyz="0 0 -0.1375" rpy="0 0 0"/>
+      <geometry><mesh filename="${mesh}/eslabon2_link.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="white_grey"/>
+    </visual>
+  </link>
+
+  <joint name="joint_3" type="revolute">
+    <origin xyz="0 0 0.1277" rpy="0 0 0"/><parent link="link_2"/><child link="link_3"/>
+    <axis xyz="0 -1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+  </joint>
+  <link name="link_3">
+    <visual>
+      <origin xyz="0 0 -0.2652" rpy="0 0 0"/>
+      <geometry><mesh filename="${mesh}/eslabon3_link.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="white_grey"/>
+    </visual>
+  </link>
+
+  <!-- joint_4: ROLL de muñeca (nuevo respecto a brazo.urdf). El eje pasa por
+       el centro de la muñeca del CAD (x=0.038 en el frame de link_3: pieza
+       descentrada del diseño original) y es vertical en HOME. -->
+  <joint name="joint_4" type="revolute">
+    <origin xyz="0.038 0 0.1213" rpy="0 0 0"/><parent link="link_3"/><child link="link_4"/>
+    <axis xyz="0 0 1"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+  </joint>
+  <!-- link_4: portador del roll (el CAD no tiene pieza separada) -->
+  <link name="link_4"/>
+
+  <!-- joint_5: pitch de pinza. Eje +Y, igual que el modelo primitivo/DH. -->
+  <joint name="joint_5" type="revolute">
+    <origin xyz="0 0 0" rpy="0 0 0"/><parent link="link_4"/><child link="link_5"/>
+    <axis xyz="0 1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+  </joint>
+  <!-- link_5 = eslabon4 del CAD (muñeca + gripper unidos en una pieza) -->
+  <link name="link_5">
+    <visual>
+      <origin xyz="-0.038 0 -0.3865" rpy="0 0 0"/>
+      <geometry><mesh filename="${mesh}/eslabon4_link.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="black"/>
+    </visual>
+  </link>
+
+  <!-- tool0 = TCP (punta del gripper, L5=0.090). Solo frame. -->
+  <joint name="tool_fixed" type="fixed">
+    <origin xyz="0 0 0.090" rpy="0 0 0"/><parent link="link_5"/><child link="tool0"/>
+  </joint>
+  <link name="tool0"/>
+
+</robot>

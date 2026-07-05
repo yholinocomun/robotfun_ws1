@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>robotfun_firmware</name>
+  <version>0.2.0</version>
+  <description>
+    Firmware ESP32 micro-ROS del brazo RobotFun (6 canales: 5 juntas + gripper;
+    joint_4 bloqueable) y launch del micro-ROS Agent. El .ino se compila con
+    Arduino IDE, no con colcon.
+  </description>
+  <maintainer email="yholicomun@gmail.com">yholi</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <!-- micro_ros_agent se instala aparte (snap/docker/fuente); no es rosdep-able
+       en todas las distros, por eso no se declara como depend estricta. -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

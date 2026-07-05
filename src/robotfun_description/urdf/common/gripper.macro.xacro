@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!-- ============================================================================
+     gripper.macro.xacro
+     Gripper de 1 GDL (canal 6 del firmware): junta "gripper" (dedo izquierdo)
+     + junta espejo "gripper_right" (mimic, multiplier=-1). Los dedos son cajas
+     finas: geometría de VISUALIZACIÓN, no afecta a la FK del TCP (tool0 sigue
+     siendo la referencia de cinemática).
+     En simulación, joint_state_relay publica también gripper_right; con
+     sliders, joint_state_publisher_gui resuelve el mimic automáticamente.
+     ========================================================================== -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="gripper_primitive" params="parent *origin">
+    <joint name="gripper" type="revolute">
+      <xacro:insert_block name="origin"/>
+      <parent link="${parent}"/><child link="gripper_finger_left"/>
+      <axis xyz="0 1 0"/>
+      <limit effort="5.0" lower="0.0" upper="1.2" velocity="2.0"/>
+    </joint>
+    <link name="gripper_finger_left">
+      <inertial><mass value="0.01"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/></inertial>
+      <visual>
+        <origin xyz="0.012 0 0.018" rpy="0 0 0"/>
+        <geometry><box size="0.006 0.012 0.036"/></geometry>
+        <material name="red"/>
+      </visual>
+    </link>
+    <joint name="gripper_right" type="revolute">
+      <xacro:insert_block name="origin"/>
+      <parent link="${parent}"/><child link="gripper_finger_right"/>
+      <axis xyz="0 1 0"/>
+      <limit effort="5.0" lower="-1.2" upper="0.0" velocity="2.0"/>
+      <mimic joint="gripper" multiplier="-1.0"/>
+    </joint>
+    <link name="gripper_finger_right">
+      <inertial><mass value="0.01"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/></inertial>
+      <visual>
+        <origin xyz="-0.012 0 0.018" rpy="0 0 0"/>
+        <geometry><box size="0.006 0.012 0.036"/></geometry>
+        <material name="red"/>
+      </visual>
+    </link>
+  </xacro:macro>
+
+</robot>

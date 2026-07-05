@@ -1,0 +1,139 @@
+<?xml version="1.0"?>
+<!-- ============================================================================
+     arm.macro.xacro  —  esqueleto PRIMITIVO (tabla DH del usuario, 5 juntas)
+     ===========================================================================
+     Brazo yaw + pitch + pitch + ROLL + pitch dibujado con PRIMITIVAS
+     dimensionadas a la tabla DH (metros):
+         L0=0.010  L1=0.063  L2=0.120  L3=0.090  L4=0.030  L5=0.090
+     Reproduce EXACTAMENTE la FK del núcleo (TF == FK, validado por
+     scripts/verify_kinematics.py y test_kinematics.py).
+     FK(HOME) → TCP = [0.010, 0, 0.393].
+
+     Ejes (equivalencia URDF↔DH validada numéricamente):
+         joint_1 = (0 0 1)  yaw de base
+         joint_2 = (0 -1 0) pitch de hombro
+         joint_3 = (0 -1 0) pitch de codo
+         joint_4 = (0 0 1)  ROLL de muñeca (colineal con el antebrazo)
+         joint_5 = (0 +1 0) pitch de pinza  (signo + por la tabla DH: los dos
+                            twists α=+90° dejan el eje del pitch final en +Y)
+     tool0 = frame del TCP (punta del gripper), sin geometría.
+     ========================================================================== -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:property name="lo" value="-1.5708"/>   <!-- −90° (HOME=0 ⇒ servo a 90°) -->
+  <xacro:property name="hi" value="1.5708"/>    <!-- +90° -->
+
+  <xacro:macro name="robotfun_arm">
+
+    <link name="world"/>
+    <joint name="base_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="0 0 0"/><parent link="world"/><child link="base_link"/>
+    </joint>
+
+    <!-- base_link (soporte fijo) -->
+    <link name="base_link">
+      <inertial><mass value="1.0"/>
+        <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+      <visual>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.045" length="0.03"/></geometry>
+        <material name="grey"/>
+      </visual>
+    </link>
+
+    <!-- joint_1: yaw de base -->
+    <joint name="joint_1" type="revolute">
+      <origin xyz="0 0 0" rpy="0 0 0"/><parent link="base_link"/><child link="link_1"/>
+      <axis xyz="0 0 1"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+    </joint>
+
+    <!-- link_1: columna de yaw hasta el hombro (L0 radial, L1 alto) -->
+    <link name="link_1">
+      <inertial><origin xyz="0.005 0 0.032"/><mass value="0.5"/>
+        <inertia ixx="1e-3" ixy="0" ixz="0" iyy="1e-3" iyz="0" izz="1e-3"/></inertial>
+      <visual>
+        <origin xyz="0.005 0 0.032" rpy="0 0.156 0"/>
+        <geometry><cylinder radius="0.022" length="0.064"/></geometry>
+        <material name="black"/>
+      </visual>
+    </link>
+
+    <!-- joint_2: pitch de hombro — offset radial L0=0.010, alto L1=0.063 -->
+    <joint name="joint_2" type="revolute">
+      <origin xyz="0.010 0 0.063" rpy="0 0 0"/><parent link="link_1"/><child link="link_2"/>
+      <axis xyz="0 -1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+    </joint>
+
+    <!-- link_2: brazo L2=0.120 -->
+    <link name="link_2">
+      <inertial><origin xyz="0 0 0.06"/><mass value="0.4"/>
+        <inertia ixx="1e-3" ixy="0" ixz="0" iyy="1e-3" iyz="0" izz="1e-3"/></inertial>
+      <visual>
+        <origin xyz="0 0 0.060" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.018" length="0.120"/></geometry>
+        <material name="red"/>
+      </visual>
+    </link>
+
+    <!-- joint_3: pitch de codo -->
+    <joint name="joint_3" type="revolute">
+      <origin xyz="0 0 0.120" rpy="0 0 0"/><parent link="link_2"/><child link="link_3"/>
+      <axis xyz="0 -1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+    </joint>
+
+    <!-- link_3: antebrazo inferior L3=0.090 (codo → servo de roll) -->
+    <link name="link_3">
+      <inertial><origin xyz="0 0 0.045"/><mass value="0.2"/>
+        <inertia ixx="8e-4" ixy="0" ixz="0" iyy="8e-4" iyz="0" izz="8e-4"/></inertial>
+      <visual>
+        <origin xyz="0 0 0.045" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.015" length="0.090"/></geometry>
+        <material name="blue"/>
+      </visual>
+    </link>
+
+    <!-- joint_4: ROLL de muñeca — eje colineal con el antebrazo (Z local).
+         En HOME girarlo NO traslada el TCP (roll puro, validado). -->
+    <joint name="joint_4" type="revolute">
+      <origin xyz="0 0 0.090" rpy="0 0 0"/><parent link="link_3"/><child link="link_4"/>
+      <axis xyz="0 0 1"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+    </joint>
+
+    <!-- link_4: antebrazo superior L4=0.030 (roll → pitch de pinza).
+         Caja (no cilindro) para VER girar el roll en RViz. -->
+    <link name="link_4">
+      <inertial><origin xyz="0 0 0.015"/><mass value="0.1"/>
+        <inertia ixx="5e-4" ixy="0" ixz="0" iyy="5e-4" iyz="0" izz="5e-4"/></inertial>
+      <visual>
+        <origin xyz="0 0 0.015" rpy="0 0 0"/>
+        <geometry><box size="0.030 0.018 0.030"/></geometry>
+        <material name="green"/>
+      </visual>
+    </link>
+
+    <!-- joint_5: pitch de pinza. Eje +Y (signo impuesto por la tabla DH). -->
+    <joint name="joint_5" type="revolute">
+      <origin xyz="0 0 0.030" rpy="0 0 0"/><parent link="link_4"/><child link="link_5"/>
+      <axis xyz="0 1 0"/><limit lower="${lo}" upper="${hi}" effort="10.0" velocity="1.5"/>
+    </joint>
+
+    <!-- link_5: mano L5=0.090 (pitch de pinza → punta del gripper) -->
+    <link name="link_5">
+      <inertial><origin xyz="0 0 0.045"/><mass value="0.15"/>
+        <inertia ixx="5e-4" ixy="0" ixz="0" iyy="5e-4" iyz="0" izz="5e-4"/></inertial>
+      <visual>
+        <origin xyz="0 0 0.045" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.013" length="0.090"/></geometry>
+        <material name="black"/>
+      </visual>
+    </link>
+
+    <!-- tool0 = TCP (punta del gripper). Solo frame, sin geometría.
+         La pinza apunta por el EJE X de este frame (en HOME, hacia +Z). -->
+    <joint name="tool_fixed" type="fixed">
+      <origin xyz="0 0 0.090" rpy="0 0 0"/><parent link="link_5"/><child link="tool0"/>
+    </joint>
+    <link name="tool0"/>
+
+  </xacro:macro>
+</robot>
